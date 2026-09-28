@@ -93,6 +93,10 @@ def load_model_safely(path, label):
 
         return None
 
+    # --------------------------------------------------------
+    # First attempt: standard load
+    # --------------------------------------------------------
+
     try:
 
         print()
@@ -108,13 +112,55 @@ def load_model_safely(path, label):
 
         return model
 
-    except Exception as e:
+    except Exception as first_err:
+
+        print(f"[WARNING] Standard load failed: {first_err}")
+
+    # --------------------------------------------------------
+    # Second attempt: patch Dense/Conv2D to tolerate
+    # unknown kwargs (e.g. quantization_config from newer Keras)
+    # --------------------------------------------------------
+
+    try:
+
+        print(f"[INFO] Retrying {label} with compatibility patch...")
+
+        from tensorflow.keras import layers as _kl
+
+        _orig_dense_init = _kl.Dense.__init__
+        _orig_conv2d_init = _kl.Conv2D.__init__
+
+        def _patched_dense_init(self, *args, **kwargs):
+            kwargs.pop("quantization_config", None)
+            _orig_dense_init(self, *args, **kwargs)
+
+        def _patched_conv2d_init(self, *args, **kwargs):
+            kwargs.pop("quantization_config", None)
+            _orig_conv2d_init(self, *args, **kwargs)
+
+        _kl.Dense.__init__  = _patched_dense_init
+        _kl.Conv2D.__init__ = _patched_conv2d_init
+
+        model = keras.models.load_model(
+            path,
+            compile=False
+        )
+
+        # Restore originals
+        _kl.Dense.__init__  = _orig_dense_init
+        _kl.Conv2D.__init__ = _orig_conv2d_init
+
+        print(f"[SUCCESS] {label} loaded with compatibility patch")
+
+        return model
+
+    except Exception as second_err:
 
         print()
         print("=" * 70)
         print(f"[ERROR] Could not load {label}")
         print(f"Path: {path}")
-        print(f"Error: {e}")
+        print(f"Error: {second_err}")
         print("=" * 70)
 
         return None
@@ -713,7 +759,6 @@ if __name__ == "__main__":
     print("Starting Flask server...")
     print("Open: http://127.0.0.1:5000")
     print()
-
     app.run(
         host="127.0.0.1",
         port=5000,
